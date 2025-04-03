@@ -1,8 +1,8 @@
 // pages/api/upload.ts
 import { NextApiRequest, NextApiResponse } from "next";
-import { IncomingForm } from "formidable";
+import { IncomingForm, Fields, Files } from "formidable";
 import dotenv from "dotenv";
-import processCsvFile from "@/utils/generator";
+import { processCsvFile, validateCsv } from "@/utils/generator";
 
 dotenv.config();
 
@@ -12,7 +12,15 @@ export const config = {
   },
 };
 
-const parseForm = (req: NextApiRequest): Promise<{ fields: formidable.Fields; files: formidable.Files }> => {
+type FileResponseType = {
+  processedCount: number;
+  unprocessedCount: number;
+  unprocessedRecords: { name: string; reason: string }[];
+};
+
+const parseForm = (
+  req: NextApiRequest
+): Promise<{ fields: Fields; files: Files }> => {
   const form = new IncomingForm();
 
   return new Promise((resolve, reject) => {
@@ -23,15 +31,13 @@ const parseForm = (req: NextApiRequest): Promise<{ fields: formidable.Fields; fi
   });
 };
 
-
 const uploadHandler = async (req: NextApiRequest, res: NextApiResponse) => {
   if (req.method !== "POST") {
     return res.status(405).json({ message: "Method Not Allowed" });
   }
 
   try {
-    const { files } = await parseForm(req);
-    console.log("🚀 ~ uploadHandler ~ files:", files)
+    const { files, fields } = await parseForm(req);
 
     if (!files.file) {
       return res.status(400).json({ message: "No file uploaded" });
@@ -42,16 +48,27 @@ const uploadHandler = async (req: NextApiRequest, res: NextApiResponse) => {
     if (!uploadedFile.filepath) {
       return res.status(400).json({ message: "Invalid file upload" });
     }
-
+    const userEnvVariable = fields.environment as string[];
+    const type = fields.type as string[];
     const file = uploadedFile.filepath; // Ensure `filepath` is correct for your version
-    console.log("🚀 ~ uploadHandler ~ file:", file)
+    await validateCsv(file);
+    const response: FileResponseType = (await processCsvFile(
+      file,
+      userEnvVariable[0],
+      type[0]
+    )) as FileResponseType;
 
-    await processCsvFile(file);
-
-    return res.status(200).json({ message: "File processed successfully" });
+    return res.status(200).json({
+      message: `File processed successfully`,
+      processedCount: response.processedCount,
+      unprocessedCount: response.unprocessedCount,
+      unprocessedRecords: response.unprocessedRecords,
+    });
   } catch (error) {
     console.error("Error:", error);
-    return res.status(500).json({ message: "Error processing file" });
+    const err = error as Error;
+    const errorMsg = err.message || "Error processing file";
+    return res.status(500).json({ message: errorMsg });
   }
 };
 
